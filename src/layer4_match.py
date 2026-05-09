@@ -98,3 +98,8 @@ def model_vs_market(model_probs, market_odds):
         '模型概率': model_probs,
         '差值': diff
     }, index=['主胜', '平局', '客胜'])
+  # 放在 layer4_match.py 文件末尾，其他函数保持不变
+
+def apply_match_context_adjustments(home_expg, away_expg, home_adj, away_adj):
+    """在计算概率前，手动调整预期进球"""
+    return home_expg * home_adj, away_expg * away_adj
