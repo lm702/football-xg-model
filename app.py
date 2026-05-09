@@ -94,7 +94,7 @@ if uploaded_file is not None:
 
         with tab2:
             st.subheader("预期积分残差 (运气指标)")
-            st.dataframe(xpts_summary.style.format("{:.2f}").bar(subset=['residual'], color=['#d65f5f' if x < 0 else '#5fba7d' for x in xpts_summary['residual']]))
+            st.dataframe(xpts_summary.style.format("{:.2f}").bar(subset=['residual'], color=['#d65f5f', '#5fba7d']))
             if home_team in trends:
                 t = trends[home_team]
                 st.write(f"{home_team} 近期xG净胜值变化: {t['delta_net']:.2f}")
