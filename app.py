@@ -18,7 +18,7 @@ if uploaded_file is not None:
     # 读取与清洗
     df = load_and_clean(uploaded_file)
     st.sidebar.success(f"成功加载 {len(df)} 场比赛数据")
-    
+
     # 计算各项指标（缓存）
     @st.cache_data
     def compute_all(df):
@@ -29,17 +29,18 @@ if uploaded_file is not None:
         set_def = compute_setpiece_defense_ratio(df)
         shooting = compute_shooting_quality(df)
         return team_coeffs, league_avg, xpts_summary, trends, set_att, set_def, shooting
-    
+
     team_coeffs, league_avg, xpts_summary, trends, set_att, set_def, shooting = compute_all(df)
-    
-    # 侧边栏选择比赛
+
     # 安全获取所有球队名（避免混合类型报错）
-all_teams = df['home_team'].dropna().astype(str).tolist() + df['away_team'].dropna().astype(str).tolist()
-teams = sorted(set(all_teams))
+    all_teams = df['home_team'].dropna().astype(str).tolist() + df['away_team'].dropna().astype(str).tolist()
+    teams = sorted(set(all_teams))
+
+    # 侧边栏选择比赛
     st.sidebar.subheader("比赛推演")
     home_team = st.sidebar.selectbox("主队", teams, index=0)
     away_team = st.sidebar.selectbox("客队", teams, index=1)
-    
+
     if home_team == away_team:
         st.sidebar.error("主客队不能相同")
     else:
@@ -48,10 +49,10 @@ teams = sorted(set(all_teams))
             home_team, away_team, team_coeffs, league_avg, trends,
             set_att, set_def
         )
-        
+
         # 泊松概率
         h_win, draw, a_win, prob_matrix = poisson_probabilities(home_expg, away_expg, dixon_coles_adjust=True)
-        
+
         # 主界面展示
         col1, col2, col3 = st.columns(3)
         col1.metric("主队校准预期进球 (ExpG)", f"{home_expg:.2f}")
@@ -61,10 +62,10 @@ teams = sorted(set(all_teams))
             st.write(f"主胜: {h_win:.2%}")
             st.write(f"平局: {draw:.2%}")
             st.write(f"客胜: {a_win:.2%}")
-        
+
         # 比分矩阵
         st.plotly_chart(plot_match_matrix(prob_matrix, home_team, away_team), use_container_width=True)
-        
+
         # 可选：市场赔率对比
         st.subheader("与市场赔率对比（可选）")
         with st.expander("输入赔率"):
@@ -83,24 +84,24 @@ teams = sorted(set(all_teams))
                     st.info("模型认为主胜被低估")
                 elif diff[2] > 0.05:
                     st.info("模型认为客胜被低估")
-        
+
         # 详细信息：球队实力、趋势等
         st.header("球队深层数据")
         tab1, tab2, tab3 = st.tabs(["实力系数", "趋势 & 运气", "定位球与射门"])
-        
+
         with tab1:
             st.dataframe(team_coeffs.style.format("{:.2f}"))
-        
+
         with tab2:
             st.subheader("预期积分残差 (运气指标)")
-            st.dataframe(xpts_summary.style.format("{:.2f}").bar(subset=['residual'], color=['#d65f5f' if x <0 else '#5fba7d' for x in xpts_summary['residual']]))
+            st.dataframe(xpts_summary.style.format("{:.2f}").bar(subset=['residual'], color=['#d65f5f' if x < 0 else '#5fba7d' for x in xpts_summary['residual']]))
             if home_team in trends:
                 t = trends[home_team]
                 st.write(f"{home_team} 近期xG净胜值变化: {t['delta_net']:.2f}")
             if away_team in trends:
                 t = trends[away_team]
                 st.write(f"{away_team} 近期xG净胜值变化: {t['delta_net']:.2f}")
-        
+
         with tab3:
             st.subheader("定位球依赖")
             col_a, col_b = st.columns(2)
@@ -112,7 +113,7 @@ teams = sorted(set(all_teams))
                 st.dataframe(set_def.to_frame().style.format("{:.2%}"))
             st.subheader("射门质量 (xGOT/射正)")
             st.dataframe(shooting.style.format("{:.2f}"))
-        
+
         # 可选趋势图
         st.header("球队xG趋势")
         col_t1, col_t2 = st.columns(2)
