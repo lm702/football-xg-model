@@ -44,3 +44,38 @@ def compute_trends(df, short_window=5, long_window=10):
             'long_net': long_net
         }
     return trends
+def compute_stability(df, window=10):
+    """
+    计算每支球队近 window 场的 xG_Net 标准差，并返回带评级的 DataFrame
+    """
+    # 收集所有球队的主客场比赛的 xG_Net
+    records = []
+    for _, row in df.iterrows():
+        records.append({
+            'team': row['home_team'],
+            'xg_net': row['home_npxg'] - row['away_npxg']
+        })
+        records.append({
+            'team': row['away_team'],
+            'xg_net': row['away_npxg'] - row['home_npxg']
+        })
+    all_records = pd.DataFrame(records)
+    
+    # 按球队取最近 window 场
+    stability_stats = {}
+    for team, group in all_records.groupby('team'):
+        recent = group.tail(window)
+        if len(recent) >= 3:  # 最少 3 场才计算
+            sigma = recent['xg_net'].std()
+            # 评级
+            if sigma < 1.2:
+                rating = '稳定'
+            elif sigma < 1.8:
+                rating = '中等'
+            else:
+                rating = '不稳定'
+            stability_stats[team] = {'sigma': sigma, 'rating': rating}
+        else:
+            stability_stats[team] = {'sigma': None, 'rating': '数据不足'}
+    
+    return stability_stats
