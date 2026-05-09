@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from src.data_utils import load_and_clean
 from src.layer1_base import compute_team_coefficients, compute_xpts
-from src.layer2_trend import compute_trends
+from src.layer2_trend import compute_trends, compute_stability
 from src.layer3_scenario import (compute_setpiece_attack_ratio,
                                  compute_setpiece_defense_ratio,
                                  compute_shooting_quality)
@@ -28,12 +28,16 @@ if uploaded_file is not None:
         set_att = compute_setpiece_attack_ratio(df)
         set_def = compute_setpiece_defense_ratio(df)
         shooting = compute_shooting_quality(df)
-        return team_coeffs, league_avg, xpts_summary, trends, set_att, set_def, shooting
+        stability = compute_stability(df, window=10)
+        return (team_coeffs, league_avg, xpts_summary, trends,
+                set_att, set_def, shooting, stability)
 
-    team_coeffs, league_avg, xpts_summary, trends, set_att, set_def, shooting = compute_all(df)
+    (team_coeffs, league_avg, xpts_summary, trends,
+     set_att, set_def, shooting, stability) = compute_all(df)
 
     # 安全获取所有球队名（避免混合类型报错）
-    all_teams = df['home_team'].dropna().astype(str).tolist() + df['away_team'].dropna().astype(str).tolist()
+    all_teams = (df['home_team'].dropna().astype(str).tolist() +
+                 df['away_team'].dropna().astype(str).tolist())
     teams = sorted(set(all_teams))
 
     # 侧边栏选择比赛
@@ -46,7 +50,10 @@ if uploaded_file is not None:
     else:
         # --- 临场修正面板 ---
         st.sidebar.subheader("🧠 临场修正")
-        apply_correction = st.sidebar.checkbox("开启情景修正", value=False, help="根据战意/伤病等软信息调整预期进球")
+        apply_correction = st.sidebar.checkbox(
+            "开启情景修正", value=False,
+            help="根据战意、伤病、疲劳等软信息调整预期进球"
+        )
 
         home_adj = 1.0
         away_adj = 1.0
@@ -70,24 +77,24 @@ if uploaded_file is not None:
             away_derby = st.sidebar.checkbox(f"{away_team} 是德比/宿敌战", key='away_derby')
 
             motivation_factors = {
-                '正常': {'ExpG_mult': 1.00, 'desc': '无调整'},
-                '争冠关键战': {'ExpG_mult': 1.05, 'desc': '进攻发挥可能小幅上扬'},
-                '欧战资格关键战': {'ExpG_mult': 1.02, 'desc': '微幅提振'},
-                '保级生死战': {'ExpG_mult': 0.95, 'desc': '保守紧张，进攻受限'},
-                '无欲无求': {'ExpG_mult': 0.90, 'desc': '投入度可能不足'}
+                '正常': {'mult': 1.00, 'desc': '无调整'},
+                '争冠关键战': {'mult': 1.05, 'desc': '进攻发挥可能小幅上扬'},
+                '欧战资格关键战': {'mult': 1.02, 'desc': '微幅提振'},
+                '保级生死战': {'mult': 0.95, 'desc': '保守紧张，进攻受限'},
+                '无欲无求': {'mult': 0.90, 'desc': '投入度可能不足'}
             }
 
             # 应用战意调整
             h_mot = motivation_factors[home_motivation]
             a_mot = motivation_factors[away_motivation]
-            home_adj *= h_mot['ExpG_mult']
-            away_adj *= a_mot['ExpG_mult']
+            home_adj *= h_mot['mult']
+            away_adj *= a_mot['mult']
             if home_motivation != '正常':
-                adj_log.append(f"{home_team} 因 '{home_motivation}' 修正 x{h_mot['ExpG_mult']:.2f}")
+                adj_log.append(f"{home_team} 因 '{home_motivation}' 修正 x{h_mot['mult']:.2f}")
             if away_motivation != '正常':
-                adj_log.append(f"{away_team} 因 '{away_motivation}' 修正 x{a_mot['ExpG_mult']:.2f}")
+                adj_log.append(f"{away_team} 因 '{away_motivation}' 修正 x{a_mot['mult']:.2f}")
 
-            # 德比修正 (额外叠加)
+            # 德比修正（额外叠加）
             if home_derby:
                 home_adj *= 0.95
                 adj_log.append(f"{home_team} 德比战额外下调")
@@ -95,13 +102,30 @@ if uploaded_file is not None:
                 away_adj *= 0.95
                 adj_log.append(f"{away_team} 德比战额外下调")
 
+            # 赛程疲劳修正
+            st.sidebar.markdown("**赛程疲劳**")
+            home_fatigue = st.sidebar.checkbox(f"{home_team} 受赛程疲劳影响", key='home_fatigue')
+            away_fatigue = st.sidebar.checkbox(f"{away_team} 受赛程疲劳影响", key='away_fatigue')
+            if home_fatigue or away_fatigue:
+                fatigue_factor = st.sidebar.slider(
+                    "疲劳削弱系数", 0.85, 1.00, 0.95, 0.01, key='fatigue_factor'
+                )
+                if home_fatigue:
+                    home_adj *= fatigue_factor
+                    adj_log.append(f"{home_team} 疲劳修正 x{fatigue_factor:.2f}")
+                if away_fatigue:
+                    away_adj *= fatigue_factor
+                    adj_log.append(f"{away_team} 疲劳修正 x{fatigue_factor:.2f}")
+
             # 手动微调滑块
             st.sidebar.markdown("**手动微调 (可选)**")
             home_adj = st.sidebar.slider(
-                f"主队综合调整系数", 0.80, 1.20, float(home_adj), 0.01, key='home_adj_slider'
+                f"主队综合调整系数", 0.80, 1.20, float(home_adj), 0.01,
+                key='home_adj_slider'
             )
             away_adj = st.sidebar.slider(
-                f"客队综合调整系数", 0.80, 1.20, float(away_adj), 0.01, key='away_adj_slider'
+                f"客队综合调整系数", 0.80, 1.20, float(away_adj), 0.01,
+                key='away_adj_slider'
             )
 
             if adj_log:
@@ -113,12 +137,15 @@ if uploaded_file is not None:
             home_team, away_team, team_coeffs, league_avg, trends,
             set_att, set_def
         )
-
         # 应用临场修正
-        home_expg, away_expg = apply_match_context_adjustments(home_expg, away_expg, home_adj, away_adj)
+        home_expg, away_expg = apply_match_context_adjustments(
+            home_expg, away_expg, home_adj, away_adj
+        )
 
         # 泊松概率
-        h_win, draw, a_win, prob_matrix = poisson_probabilities(home_expg, away_expg, dixon_coles_adjust=True)
+        h_win, draw, a_win, prob_matrix = poisson_probabilities(
+            home_expg, away_expg, dixon_coles_adjust=True
+        )
 
         # 主界面展示
         col1, col2, col3 = st.columns(3)
@@ -131,7 +158,10 @@ if uploaded_file is not None:
             st.write(f"客胜: {a_win:.2%}")
 
         # 比分矩阵
-        st.plotly_chart(plot_match_matrix(prob_matrix, home_team, away_team), use_container_width=True)
+        st.plotly_chart(
+            plot_match_matrix(prob_matrix, home_team, away_team),
+            use_container_width=True
+        )
 
         # 可选：市场赔率对比
         st.subheader("与市场赔率对比（可选）")
@@ -142,11 +172,14 @@ if uploaded_file is not None:
             mkt_a = col_o3.number_input("客胜赔率", value=0.0, step=0.01)
             if mkt_h > 1.0 and mkt_d > 1.0 and mkt_a > 1.0:
                 odds = [mkt_h, mkt_d, mkt_a]
-                imp_probs = [(1/o) for o in odds]
+                imp_probs = [1/o for o in odds]
                 total = sum(imp_probs)
                 imp_probs = [p/total for p in imp_probs]
                 diff = [h_win - imp_probs[0], draw - imp_probs[1], a_win - imp_probs[2]]
-                st.write("差值 (模型-市场):", dict(zip(['主胜','平局','客胜'], [f"{d:.2%}" for d in diff])))
+                st.write(
+                    "差值 (模型-市场):",
+                    dict(zip(['主胜','平局','客胜'], [f"{d:.2%}" for d in diff]))
+                )
                 if diff[0] > 0.05:
                     st.info("模型认为主胜被低估")
                 elif diff[2] > 0.05:
@@ -161,13 +194,32 @@ if uploaded_file is not None:
 
         with tab2:
             st.subheader("预期积分残差 (运气指标)")
-            st.dataframe(xpts_summary.style.format("{:.2f}").bar(subset=['residual'], color=['#d65f5f', '#5fba7d']))
+            st.dataframe(
+                xpts_summary.style.format("{:.2f}")
+                .bar(subset=['residual'], color=['#d65f5f', '#5fba7d'])
+            )
+
+            # 趋势
             if home_team in trends:
                 t = trends[home_team]
                 st.write(f"{home_team} 近期xG净胜值变化: {t['delta_net']:.2f}")
             if away_team in trends:
                 t = trends[away_team]
                 st.write(f"{away_team} 近期xG净胜值变化: {t['delta_net']:.2f}")
+
+            # 稳定性评估
+            st.markdown("---")
+            st.subheader("近10场稳定性评估 (xG净胜值标准差)")
+            if home_team in stability:
+                s = stability[home_team]
+                st.write(f"{home_team}: σ={s['sigma']:.2f}，评级：**{s['rating']}**")
+            else:
+                st.write(f"{home_team}: 数据不足")
+            if away_team in stability:
+                s = stability[away_team]
+                st.write(f"{away_team}: σ={s['sigma']:.2f}，评级：**{s['rating']}**")
+            else:
+                st.write(f"{away_team}: 数据不足")
 
         with tab3:
             st.subheader("定位球依赖")
