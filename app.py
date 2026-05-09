@@ -6,7 +6,7 @@ from src.layer2_trend import compute_trends
 from src.layer3_scenario import (compute_setpiece_attack_ratio,
                                  compute_setpiece_defense_ratio,
                                  compute_shooting_quality)
-from src.layer4_match import calibrate_expg, poisson_probabilities
+from src.layer4_match import calibrate_expg, poisson_probabilities, apply_match_context_adjustments
 from src.visual import plot_xg_trend, plot_match_matrix
 
 st.set_page_config(page_title="足球xG推理模型", layout="wide")
@@ -44,11 +44,78 @@ if uploaded_file is not None:
     if home_team == away_team:
         st.sidebar.error("主客队不能相同")
     else:
+        # --- 临场修正面板 ---
+        st.sidebar.subheader("🧠 临场修正")
+        apply_correction = st.sidebar.checkbox("开启情景修正", value=False, help="根据战意/伤病等软信息调整预期进球")
+
+        home_adj = 1.0
+        away_adj = 1.0
+        adj_log = []
+
+        if apply_correction:
+            # 战意锚点
+            st.sidebar.markdown("**战意锚点**")
+            home_motivation = st.sidebar.selectbox(
+                f"{home_team} 比赛动机",
+                ['正常', '争冠关键战', '欧战资格关键战', '保级生死战', '无欲无求'],
+                key='home_motivation'
+            )
+            away_motivation = st.sidebar.selectbox(
+                f"{away_team} 比赛动机",
+                ['正常', '争冠关键战', '欧战资格关键战', '保级生死战', '无欲无求'],
+                key='away_motivation'
+            )
+
+            home_derby = st.sidebar.checkbox(f"{home_team} 是德比/宿敌战", key='home_derby')
+            away_derby = st.sidebar.checkbox(f"{away_team} 是德比/宿敌战", key='away_derby')
+
+            motivation_factors = {
+                '正常': {'ExpG_mult': 1.00, 'desc': '无调整'},
+                '争冠关键战': {'ExpG_mult': 1.05, 'desc': '进攻发挥可能小幅上扬'},
+                '欧战资格关键战': {'ExpG_mult': 1.02, 'desc': '微幅提振'},
+                '保级生死战': {'ExpG_mult': 0.95, 'desc': '保守紧张，进攻受限'},
+                '无欲无求': {'ExpG_mult': 0.90, 'desc': '投入度可能不足'}
+            }
+
+            # 应用战意调整
+            h_mot = motivation_factors[home_motivation]
+            a_mot = motivation_factors[away_motivation]
+            home_adj *= h_mot['ExpG_mult']
+            away_adj *= a_mot['ExpG_mult']
+            if home_motivation != '正常':
+                adj_log.append(f"{home_team} 因 '{home_motivation}' 修正 x{h_mot['ExpG_mult']:.2f}")
+            if away_motivation != '正常':
+                adj_log.append(f"{away_team} 因 '{away_motivation}' 修正 x{a_mot['ExpG_mult']:.2f}")
+
+            # 德比修正 (额外叠加)
+            if home_derby:
+                home_adj *= 0.95
+                adj_log.append(f"{home_team} 德比战额外下调")
+            if away_derby:
+                away_adj *= 0.95
+                adj_log.append(f"{away_team} 德比战额外下调")
+
+            # 手动微调滑块
+            st.sidebar.markdown("**手动微调 (可选)**")
+            home_adj = st.sidebar.slider(
+                f"主队综合调整系数", 0.80, 1.20, float(home_adj), 0.01, key='home_adj_slider'
+            )
+            away_adj = st.sidebar.slider(
+                f"客队综合调整系数", 0.80, 1.20, float(away_adj), 0.01, key='away_adj_slider'
+            )
+
+            if adj_log:
+                st.sidebar.info("情景调整:\n" + "\n".join(adj_log))
+        # --- 修正面板结束 ---
+
         # 推演分析
         home_expg, away_expg = calibrate_expg(
             home_team, away_team, team_coeffs, league_avg, trends,
             set_att, set_def
         )
+
+        # 应用临场修正
+        home_expg, away_expg = apply_match_context_adjustments(home_expg, away_expg, home_adj, away_adj)
 
         # 泊松概率
         h_win, draw, a_win, prob_matrix = poisson_probabilities(home_expg, away_expg, dixon_coles_adjust=True)
