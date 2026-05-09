@@ -33,7 +33,9 @@ if uploaded_file is not None:
     team_coeffs, league_avg, xpts_summary, trends, set_att, set_def, shooting = compute_all(df)
     
     # 侧边栏选择比赛
-    teams = sorted(pd.unique(df['home_team'].tolist() + df['away_team'].tolist()))
+    # 安全获取所有球队名（避免混合类型报错）
+all_teams = df['home_team'].dropna().astype(str).tolist() + df['away_team'].dropna().astype(str).tolist()
+teams = sorted(set(all_teams))
     st.sidebar.subheader("比赛推演")
     home_team = st.sidebar.selectbox("主队", teams, index=0)
     away_team = st.sidebar.selectbox("客队", teams, index=1)
