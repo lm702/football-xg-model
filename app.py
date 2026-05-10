@@ -48,7 +48,7 @@ if uploaded_file is not None:
     if home_team == away_team:
         st.sidebar.error("主客队不能相同")
     else:
-        # --- 临场修正面板（修复版）---
+        # --- 临场修正面板（最终修复版）---
         st.sidebar.subheader("🧠 临场修正")
         apply_correction = st.sidebar.checkbox(
             "开启情景修正", value=False,
@@ -117,16 +117,15 @@ if uploaded_file is not None:
                     away_adj *= fatigue_factor
                     adj_log.append(f"{away_team} 疲劳修正 x{fatigue_factor:.2f}")
 
-            # 手动微调滑块（显示并可能覆盖上面得到的综合系数）
-            st.sidebar.markdown("**手动微调 (可选)**")
-            home_adj = st.sidebar.slider(
-                f"主队综合调整系数", 0.80, 1.20, float(home_adj), 0.01,
-                key='home_adj_slider'
-            )
-            away_adj = st.sidebar.slider(
-                f"客队综合调整系数", 0.80, 1.20, float(away_adj), 0.01,
-                key='away_adj_slider'
-            )
+            # 显示当前综合调整系数（只读），并可选手动覆盖
+            st.sidebar.markdown("**当前综合调整系数**")
+            st.sidebar.write(f"主队: {home_adj:.2f}")
+            st.sidebar.write(f"客队: {away_adj:.2f}")
+
+            manual_override = st.sidebar.checkbox("手动覆盖调整系数", key='manual_override')
+            if manual_override:
+                home_adj = st.sidebar.slider("主队调整系数", 0.80, 1.20, float(home_adj), 0.01, key='home_adj_override')
+                away_adj = st.sidebar.slider("客队调整系数", 0.80, 1.20, float(away_adj), 0.01, key='away_adj_override')
 
             if adj_log:
                 st.sidebar.info("情景调整:\n" + "\n".join(adj_log))
