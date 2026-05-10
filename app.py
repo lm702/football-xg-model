@@ -48,7 +48,7 @@ if uploaded_file is not None:
     if home_team == away_team:
         st.sidebar.error("主客队不能相同")
     else:
-        # --- 临场修正面板 ---
+        # --- 临场修正面板（修复版）---
         st.sidebar.subheader("🧠 临场修正")
         apply_correction = st.sidebar.checkbox(
             "开启情景修正", value=False,
@@ -77,24 +77,24 @@ if uploaded_file is not None:
             away_derby = st.sidebar.checkbox(f"{away_team} 是德比/宿敌战", key='away_derby')
 
             motivation_factors = {
-                '正常': {'mult': 1.00, 'desc': '无调整'},
-                '争冠关键战': {'mult': 1.05, 'desc': '进攻发挥可能小幅上扬'},
-                '欧战资格关键战': {'mult': 1.02, 'desc': '微幅提振'},
-                '保级生死战': {'mult': 0.95, 'desc': '保守紧张，进攻受限'},
-                '无欲无求': {'mult': 0.90, 'desc': '投入度可能不足'}
+                '正常': 1.00,
+                '争冠关键战': 1.05,
+                '欧战资格关键战': 1.02,
+                '保级生死战': 0.95,
+                '无欲无求': 0.90
             }
 
-            # 应用战意调整
-            h_mot = motivation_factors[home_motivation]
-            a_mot = motivation_factors[away_motivation]
-            home_adj *= h_mot['mult']
-            away_adj *= a_mot['mult']
+            # 应用战意
+            h_mot_mult = motivation_factors[home_motivation]
+            a_mot_mult = motivation_factors[away_motivation]
+            home_adj *= h_mot_mult
+            away_adj *= a_mot_mult
             if home_motivation != '正常':
-                adj_log.append(f"{home_team} 因 '{home_motivation}' 修正 x{h_mot['mult']:.2f}")
+                adj_log.append(f"{home_team} 因 '{home_motivation}' 修正 x{h_mot_mult:.2f}")
             if away_motivation != '正常':
-                adj_log.append(f"{away_team} 因 '{away_motivation}' 修正 x{a_mot['mult']:.2f}")
+                adj_log.append(f"{away_team} 因 '{away_motivation}' 修正 x{a_mot_mult:.2f}")
 
-            # 德比修正（额外叠加）
+            # 德比
             if home_derby:
                 home_adj *= 0.95
                 adj_log.append(f"{home_team} 德比战额外下调")
@@ -102,13 +102,13 @@ if uploaded_file is not None:
                 away_adj *= 0.95
                 adj_log.append(f"{away_team} 德比战额外下调")
 
-            # 赛程疲劳修正
+            # 赛程疲劳
             st.sidebar.markdown("**赛程疲劳**")
             home_fatigue = st.sidebar.checkbox(f"{home_team} 受赛程疲劳影响", key='home_fatigue')
             away_fatigue = st.sidebar.checkbox(f"{away_team} 受赛程疲劳影响", key='away_fatigue')
             if home_fatigue or away_fatigue:
                 fatigue_factor = st.sidebar.slider(
-                    "疲劳削弱系数", 0.85, 1.00, 0.95, 0.01, key='fatigue_factor'
+                    "疲劳削弱系数", 0.80, 1.00, 0.95, 0.01, key='fatigue_factor'
                 )
                 if home_fatigue:
                     home_adj *= fatigue_factor
@@ -117,7 +117,7 @@ if uploaded_file is not None:
                     away_adj *= fatigue_factor
                     adj_log.append(f"{away_team} 疲劳修正 x{fatigue_factor:.2f}")
 
-            # 手动微调滑块
+            # 手动微调滑块（显示并可能覆盖上面得到的综合系数）
             st.sidebar.markdown("**手动微调 (可选)**")
             home_adj = st.sidebar.slider(
                 f"主队综合调整系数", 0.80, 1.20, float(home_adj), 0.01,
@@ -199,7 +199,6 @@ if uploaded_file is not None:
                 .bar(subset=['residual'], color=['#d65f5f', '#5fba7d'])
             )
 
-            # 趋势
             if home_team in trends:
                 t = trends[home_team]
                 st.write(f"{home_team} 近期xG净胜值变化: {t['delta_net']:.2f}")
