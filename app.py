@@ -211,7 +211,7 @@ if uploaded_file is not None:
                 timeline = format_timeline(events, home_team, away_team)
                 st.text(timeline)
 
-            # 深层数据标签页（与之前一致）
+            # 深层数据标签页
             st.header("球队深层数据")
             tab1, tab2, tab3 = st.tabs(["实力系数", "趋势 & 运气", "定位球与射门"])
 
@@ -263,7 +263,7 @@ if uploaded_file is not None:
             with col_t2:
                 st.plotly_chart(plot_xg_trend(away_team, df), use_container_width=True)
 
-    # ========== 历史回测模式（扩展12） ==========
+    # ========== 历史回测模式（修复了NaT错误） ==========
     else:
         st.sidebar.subheader("📊 回测追踪")
         st.sidebar.markdown("选择一场已发生的比赛，对比模型预测与实际结果")
@@ -272,15 +272,19 @@ if uploaded_file is not None:
         if 'backtest_records' not in st.session_state:
             st.session_state['backtest_records'] = []
 
-        # 下拉选择比赛（按日期排序）
-        df_sorted = df.sort_values('date', ascending=False)
+        # 过滤掉日期无效的比赛，并按日期排序
+        df_valid = df.dropna(subset=['date']).sort_values('date', ascending=False)
+        if df_valid.empty:
+            st.warning("没有可用日期进行回测")
+            st.stop()
+
         match_options = [
             f"{row['date'].strftime('%Y-%m-%d')}  {row['home_team']} vs {row['away_team']}"
-            for _, row in df_sorted.iterrows()
+            for _, row in df_valid.iterrows()
         ]
         selected_match_str = st.sidebar.selectbox("选择比赛", match_options)
         selected_idx = match_options.index(selected_match_str)
-        match_row = df_sorted.iloc[selected_idx]
+        match_row = df_valid.iloc[selected_idx]
 
         # 显示所选比赛的基本信息
         col_info1, col_info2 = st.columns(2)
@@ -300,7 +304,7 @@ if uploaded_file is not None:
                 team_coeffs, league_avg, trends,
                 set_att, set_def
             )
-            # 回测模式下暂不应用临场修正，保持纯数据驱动
+            # 回测模式下不应用临场修正，保持纯数据驱动
             h_win, draw, a_win, prob_matrix = poisson_probabilities(
                 home_expg, away_expg, dixon_coles_adjust=True
             )
@@ -313,7 +317,7 @@ if uploaded_file is not None:
 
             st.write(f"模型预期进球: 主 {home_expg:.2f} - 客 {away_expg:.2f}")
 
-            # 计算准确率指标
+            # 确定实际结果
             def outcome(actual_h, actual_a):
                 if actual_h > actual_a:
                     return 'H'
@@ -327,17 +331,17 @@ if uploaded_file is not None:
             predicted_out = max(pred_probs, key=pred_probs.get)
             is_correct = (predicted_out == actual_out)
 
-            # Brier分数（胜平负）
+            # Brier分数
             brier = (h_win - (1 if actual_out == 'H' else 0))**2 + \
                     (draw - (1 if actual_out == 'D' else 0))**2 + \
                     (a_win - (1 if actual_out == 'A' else 0))**2
-            brier /= 3  # 归一化
+            brier /= 3
 
             col_acc1, col_acc2 = st.columns(2)
             col_acc1.metric("方向正确?", "✅" if is_correct else "❌")
             col_acc2.metric("Brier分数 (越低越好)", f"{brier:.3f}")
 
-            # 保存记录按钮
+            # 保存记录
             if st.button("📌 保存这次回测记录"):
                 record = {
                     '日期': match_row['date'],
@@ -369,7 +373,7 @@ if uploaded_file is not None:
 
             if st.button("🗑️ 清空回测记录"):
                 st.session_state['backtest_records'] = []
-                st.experimental_rerun()
+                st.rerun()
 
 else:
     st.info("👈 请上传一个符合格式的xlsx文件开始分析")
