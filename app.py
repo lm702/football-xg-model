@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from scipy.stats import poisson          # <-- 新增此行
+from scipy.stats import poisson
 from src.data_utils import load_and_clean
 from src.layer1_base import compute_team_coefficients, compute_xpts
 from src.layer2_trend import compute_trends, compute_stability
@@ -15,6 +15,7 @@ from src.inplay import (inplay_probabilities, compute_pressure_index,
                         compute_rhythm_labels, reverse_implied_probs,
                         red_card_impact, goal_time_probability,
                         goal_rhythm_stats)
+from src.deepseek_client import deepseek_chat
 
 st.set_page_config(page_title="足球xG推理模型", layout="wide")
 st.title("⚽ 足球比赛深度推理模型（基于xG数据）")
@@ -253,6 +254,67 @@ if uploaded_file is not None:
             with col_t2:
                 st.plotly_chart(plot_xg_trend(away_team, df), use_container_width=True)
 
+            # ---------- AI 深度解读 ----------
+            st.markdown("---")
+            st.subheader("🧠 DeepSeek 深度解读")
+            if st.button("生成 AI 解读"):
+                # 准备上下文数据
+                trend_h_text = ""
+                if home_team in trends:
+                    t = trends[home_team]
+                    trend_h_text = f"xG净胜值变化：{t['delta_net']:.2f}"
+                trend_a_text = ""
+                if away_team in trends:
+                    t = trends[away_team]
+                    trend_a_text = f"xG净胜值变化：{t['delta_net']:.2f}"
+
+                stability_h_text = "无"
+                if home_team in stability:
+                    s = stability[home_team]
+                    stability_h_text = f"σ={s['sigma']:.2f} ({s['rating']})"
+                stability_a_text = "无"
+                if away_team in stability:
+                    s = stability[away_team]
+                    stability_a_text = f"σ={s['sigma']:.2f} ({s['rating']})"
+
+                set_h_val = set_att.get(home_team, 0) if hasattr(set_att, 'get') else 0
+                set_def_a_val = set_def.get(away_team, 0) if hasattr(set_def, 'get') else 0
+                set_h_text = f"{set_h_val:.0%}" if isinstance(set_h_val, (int, float)) else "无"
+                set_def_a_text = f"{set_def_a_val:.0%}" if isinstance(set_def_a_val, (int, float)) else "无"
+
+                prompt = f"""
+你是一位资深足球分析师。以下是一场即将到来的比赛的数据分析摘要：
+
+主队：{home_team}，客队：{away_team}
+模型预期进球：{home_team} {home_expg:.2f} vs {away_team} {away_expg:.2f}
+胜平负概率：主胜 {h_win:.1%}，平局 {draw:.1%}，客胜 {a_win:.1%}
+大于2.5球概率：{over25:.1%}
+
+双方近期趋势：
+{home_team} {trend_h_text}，稳定性：{stability_h_text}
+{away_team} {trend_a_text}，稳定性：{stability_a_text}
+
+定位球依赖：
+{home_team} 进攻定位球占比 {set_h_text}
+{away_team} 防守定位球占比 {set_def_a_text}
+
+临场调整系数：主队 x{home_adj:.2f}，客队 x{away_adj:.2f}
+调整说明：{'; '.join(adj_log) if adj_log else '无'}
+
+请用简洁专业的语言：
+1. 分析模型概率背后的关键驱动因素。
+2. 指出本场比赛最值得关注的战术点（如节奏、定位球、防守稳定性）。
+3. 提供1-2条滚球观察建议（基于剩余时间、比分等，但暂未进行中）。
+注意：你的分析不构成投注建议，仅供决策参考。
+"""
+                with st.spinner("AI 正在思考..."):
+                    analysis = deepseek_chat(prompt)
+                if analysis:
+                    st.success("AI 解读生成完毕")
+                    st.markdown(analysis)
+                else:
+                    st.warning("无法获取 AI 解读，请检查 API Key 或网络。")
+
     # ========== 历史回测模式 ==========
     elif mode == "历史回测":
         st.sidebar.subheader("📊 回测追踪")
@@ -353,7 +415,7 @@ if uploaded_file is not None:
                 st.session_state['backtest_records'] = []
                 st.rerun()
 
-        # ========== 走地分析模式（自动计算，无需按钮） ==========
+    # ========== 走地分析模式 ==========
     else:
         st.sidebar.subheader("🔄 资深滚球分析")
         home_team = st.sidebar.selectbox("主队", teams, index=0)
@@ -361,7 +423,6 @@ if uploaded_file is not None:
         if home_team == away_team:
             st.sidebar.error("主客队不能相同")
         else:
-            # 赛前全场ExpG
             home_expg_pre, away_expg_pre = calibrate_expg(
                 home_team, away_team, team_coeffs, league_avg, trends, set_att, set_def
             )
@@ -386,8 +447,7 @@ if uploaded_file is not None:
             red_card_team = st.sidebar.radio("红牌方", ["无", home_team, away_team])
             red_minute = st.sidebar.number_input("红牌发生分钟（若选择）", 0, 120, 0, 1)
 
-            # --------------------- 自动计算走地概率 ---------------------
-            # 红牌影响
+            # 自动计算走地概率（无按钮）
             home_adj_expg = home_expg_pre
             away_adj_expg = away_expg_pre
             if red_card_team != "无" and red_minute > 0 and red_minute <= current_min:
@@ -405,7 +465,6 @@ if uploaded_file is not None:
                 home_momentum, away_momentum, injury_time=injury
             )
 
-            # --------------------- 结果展示 ---------------------
             col1, col2, col3 = st.columns(3)
             col1.metric("主胜概率", f"{hw:.1%}")
             col2.metric("平局概率", f"{dr:.1%}")
@@ -467,6 +526,58 @@ if uploaded_file is not None:
                     st.write(f"{away_team}：穿透力 {pen_a:.2f}  压迫效率 {pre_a:.1f}")
                 except:
                     st.write("数据不足")
+
+            # ---------- AI 滚球顾问 ----------
+            st.markdown("---")
+            st.subheader("🧠 AI 滚球顾问")
+            if st.button("生成滚球建议"):
+                rhythm_h = rhythm_labels.get(home_team, '中节奏')
+                rhythm_a = rhythm_labels.get(away_team, '中节奏')
+                set_h_val = set_att.get(home_team, 0) if hasattr(set_att, 'get') else 0
+                set_def_a_val = set_def.get(away_team, 0) if hasattr(set_def, 'get') else 0
+                set_h_text = f"{set_h_val:.0%}" if isinstance(set_h_val, (int, float)) else "无"
+                set_def_a_text = f"{set_def_a_val:.0%}" if isinstance(set_def_a_val, (int, float)) else "无"
+
+                pen_h_val = pen_a_val = pre_h_val = pre_a_val = "无"
+                try:
+                    pen_h_val = f"{pressure_index.loc[home_team, 'penetration']:.2f}"
+                    pen_a_val = f"{pressure_index.loc[away_team, 'penetration']:.2f}"
+                    pre_h_val = f"{pressure_index.loc[home_team, 'pressure']:.1f}"
+                    pre_a_val = f"{pressure_index.loc[away_team, 'pressure']:.1f}"
+                except:
+                    pass
+
+                prompt = f"""
+你是一位滚球交易分析师。当前比赛进行中，数据如下：
+
+主队：{home_team}，客队：{away_team}
+当前比分：{cur_h_goals} - {cur_a_goals}，当前时间：第{current_min}分钟（补时{injury}分钟）
+剩余预期进球：{home_team} {lam_h:.2f} vs {away_team} {lam_a:.2f}
+实时胜平负概率：主胜 {hw:.1%}，平局 {dr:.1%}，客胜 {aw:.1%}
+
+球队风格：
+{home_team}：节奏 {rhythm_h}，穿透力 {pen_h_val}，压迫 {pre_h_val}
+{away_team}：节奏 {rhythm_a}，穿透力 {pen_a_val}，压迫 {pre_a_val}
+
+定位球：
+{home_team} 进攻定位球占比 {set_h_text}，{away_team} 防守定位球占比 {set_def_a_text}
+
+手动态势调整：{home_team} x{home_momentum:.2f}，{away_team} x{away_momentum:.2f}
+红牌情况：{red_card_team}（{red_minute}分钟）
+
+请基于以上信息：
+1. 评估当前比赛态势，指出哪一方更可能控制剩余时间。
+2. 指出是否存在“场面与盘口背离”的可能。
+3. 提供1-2条具体关注点（如下一个进球方向、大小球等）。
+保持简洁，注重逻辑。
+"""
+                with st.spinner("AI 正在分析..."):
+                    analysis = deepseek_chat(prompt)
+                if analysis:
+                    st.success("AI 建议生成完毕")
+                    st.markdown(analysis)
+                else:
+                    st.warning("无法获取 AI 建议，请检查 API Key 或网络。")
 
 else:
     st.info("👈 请上传一个符合格式的xlsx文件开始分析")
