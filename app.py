@@ -10,6 +10,10 @@ from src.layer3_scenario import (compute_setpiece_attack_ratio,
 from src.layer4_match import calibrate_expg, poisson_probabilities, apply_match_context_adjustments
 from src.visual import plot_xg_trend, plot_match_matrix
 from src.match_simulator import simulate_match_timeline, format_timeline
+from src.inplay import (inplay_probabilities, compute_pressure_index,
+                        compute_rhythm_labels, reverse_implied_probs,
+                        red_card_impact, goal_time_probability,
+                        goal_rhythm_stats)
 
 st.set_page_config(page_title="足球xG推理模型", layout="wide")
 st.title("⚽ 足球比赛深度推理模型（基于xG数据）")
@@ -17,11 +21,9 @@ st.title("⚽ 足球比赛深度推理模型（基于xG数据）")
 uploaded_file = st.sidebar.file_uploader("上传联赛xlsx数据", type=["xlsx"])
 
 if uploaded_file is not None:
-    # 读取与清洗
     df = load_and_clean(uploaded_file)
     st.sidebar.success(f"成功加载 {len(df)} 场比赛数据")
 
-    # 计算各项指标（缓存）
     @st.cache_data
     def compute_all(df):
         team_coeffs, league_avg = compute_team_coefficients(df, window=10)
@@ -31,19 +33,21 @@ if uploaded_file is not None:
         set_def = compute_setpiece_defense_ratio(df)
         shooting = compute_shooting_quality(df)
         stability = compute_stability(df, window=10)
+        pressure_index = compute_pressure_index(df)
+        rhythm_labels = compute_rhythm_labels(df)
         return (team_coeffs, league_avg, xpts_summary, trends,
-                set_att, set_def, shooting, stability)
+                set_att, set_def, shooting, stability,
+                pressure_index, rhythm_labels)
 
     (team_coeffs, league_avg, xpts_summary, trends,
-     set_att, set_def, shooting, stability) = compute_all(df)
+     set_att, set_def, shooting, stability,
+     pressure_index, rhythm_labels) = compute_all(df)
 
-    # 安全获取所有球队名
     all_teams = (df['home_team'].dropna().astype(str).tolist() +
                  df['away_team'].dropna().astype(str).tolist())
     teams = sorted(set(all_teams))
 
-    # ------------- 模式选择 -------------
-    mode = st.sidebar.radio("选择模式", ["实时预测", "历史回测"])
+    mode = st.sidebar.radio("选择模式", ["实时预测", "历史回测", "走地分析"])
 
     # ========== 实时预测模式 ==========
     if mode == "实时预测":
@@ -54,7 +58,7 @@ if uploaded_file is not None:
         if home_team == away_team:
             st.sidebar.error("主客队不能相同")
         else:
-            # --- 临场修正面板（修复版）---
+            # --- 临场修正面板（完整版）---
             st.sidebar.subheader("🧠 临场修正")
             apply_correction = st.sidebar.checkbox(
                 "开启情景修正", value=False,
@@ -66,7 +70,6 @@ if uploaded_file is not None:
             adj_log = []
 
             if apply_correction:
-                # 战意锚点
                 st.sidebar.markdown("**战意锚点**")
                 home_motivation = st.sidebar.selectbox(
                     f"{home_team} 比赛动机",
@@ -90,7 +93,6 @@ if uploaded_file is not None:
                     '无欲无求': 0.90
                 }
 
-                # 应用战意
                 h_mot_mult = motivation_factors[home_motivation]
                 a_mot_mult = motivation_factors[away_motivation]
                 home_adj *= h_mot_mult
@@ -100,7 +102,6 @@ if uploaded_file is not None:
                 if away_motivation != '正常':
                     adj_log.append(f"{away_team} 因 '{away_motivation}' 修正 x{a_mot_mult:.2f}")
 
-                # 德比
                 if home_derby:
                     home_adj *= 0.95
                     adj_log.append(f"{home_team} 德比战额外下调")
@@ -108,7 +109,6 @@ if uploaded_file is not None:
                     away_adj *= 0.95
                     adj_log.append(f"{away_team} 德比战额外下调")
 
-                # 赛程疲劳
                 st.sidebar.markdown("**赛程疲劳**")
                 home_fatigue = st.sidebar.checkbox(f"{home_team} 受赛程疲劳影响", key='home_fatigue')
                 away_fatigue = st.sidebar.checkbox(f"{away_team} 受赛程疲劳影响", key='away_fatigue')
@@ -123,7 +123,6 @@ if uploaded_file is not None:
                         away_adj *= fatigue_factor
                         adj_log.append(f"{away_team} 疲劳修正 x{fatigue_factor:.2f}")
 
-                # 显示当前综合系数
                 st.sidebar.write(f"当前主队系数: {home_adj:.2f}")
                 st.sidebar.write(f"当前客队系数: {away_adj:.2f}")
                 manual_override = st.sidebar.checkbox("手动覆盖调整系数", key='manual_override')
@@ -135,7 +134,6 @@ if uploaded_file is not None:
                     st.sidebar.info("情景调整:\n" + "\n".join(adj_log))
             # --- 修正面板结束 ---
 
-            # 推演分析
             home_expg, away_expg = calibrate_expg(
                 home_team, away_team, team_coeffs, league_avg, trends,
                 set_att, set_def
@@ -148,13 +146,11 @@ if uploaded_file is not None:
                 home_expg, away_expg, dixon_coles_adjust=True
             )
 
-            # 玩法概率计算
             over25 = sum(p for (i,j), p in prob_matrix.items() if i+j > 2)
             btts = sum(p for (i,j), p in prob_matrix.items() if i>0 and j>0)
             home_clean = sum(p for (i,j), p in prob_matrix.items() if i>0 and j==0)
             away_clean = sum(p for (i,j), p in prob_matrix.items() if i==0 and j>0)
 
-            # 主界面展示
             col1, col2, col3 = st.columns(3)
             col1.metric("主队校准预期进球 (ExpG)", f"{home_expg:.2f}")
             col2.metric("客队校准预期进球 (ExpG)", f"{away_expg:.2f}")
@@ -164,7 +160,6 @@ if uploaded_file is not None:
                 st.write(f"平局: {draw:.2%}")
                 st.write(f"客胜: {a_win:.2%}")
 
-            # 玩法卡片
             st.subheader("🎲 常用玩法概率")
             col_p1, col_p2, col_p3, col_p4 = st.columns(4)
             col_p1.metric("大于2.5球", f"{over25:.1%}")
@@ -172,13 +167,11 @@ if uploaded_file is not None:
             col_p3.metric("主队零封", f"{home_clean:.1%}")
             col_p4.metric("客队零封", f"{away_clean:.1%}")
 
-            # 比分矩阵
             st.plotly_chart(
                 plot_match_matrix(prob_matrix, home_team, away_team),
                 use_container_width=True
             )
 
-            # 市场赔率与价值信号
             st.subheader("与市场赔率对比（可选）")
             with st.expander("输入赔率"):
                 col_o1, col_o2, col_o3 = st.columns(3)
@@ -192,8 +185,6 @@ if uploaded_file is not None:
                     imp_probs = [p/total for p in imp_probs]
                     diff = [h_win - imp_probs[0], draw - imp_probs[1], a_win - imp_probs[2]]
                     st.write("差值 (模型-市场):", dict(zip(['主胜','平局','客胜'], [f"{d:.2%}" for d in diff])))
-
-                    # 价值信号
                     ev_h = h_win * mkt_h - 1
                     ev_d = draw * mkt_d - 1
                     ev_a = a_win * mkt_a - 1
@@ -204,14 +195,12 @@ if uploaded_file is not None:
                     if ev_a > 0.05:
                         st.success(f"🔥 客胜价值投注 (EV: +{ev_a:.2%})")
 
-            # 比赛模拟回放
             st.subheader("🎮 比赛模拟回放")
             if st.button("模拟一次比赛进程"):
                 events = simulate_match_timeline(home_expg, away_expg)
                 timeline = format_timeline(events, home_team, away_team)
                 st.text(timeline)
 
-            # 深层数据标签页
             st.header("球队深层数据")
             tab1, tab2, tab3 = st.tabs(["实力系数", "趋势 & 运气", "定位球与射门"])
 
@@ -263,16 +252,14 @@ if uploaded_file is not None:
             with col_t2:
                 st.plotly_chart(plot_xg_trend(away_team, df), use_container_width=True)
 
-    # ========== 历史回测模式（修复了NaT错误） ==========
-    else:
+    # ========== 历史回测模式 ==========
+    elif mode == "历史回测":
         st.sidebar.subheader("📊 回测追踪")
         st.sidebar.markdown("选择一场已发生的比赛，对比模型预测与实际结果")
 
-        # 初始化 session_state 存储回测记录
         if 'backtest_records' not in st.session_state:
             st.session_state['backtest_records'] = []
 
-        # 过滤掉日期无效的比赛，并按日期排序
         df_valid = df.dropna(subset=['date']).sort_values('date', ascending=False)
         if df_valid.empty:
             st.warning("没有可用日期进行回测")
@@ -286,7 +273,6 @@ if uploaded_file is not None:
         selected_idx = match_options.index(selected_match_str)
         match_row = df_valid.iloc[selected_idx]
 
-        # 显示所选比赛的基本信息
         col_info1, col_info2 = st.columns(2)
         col_info1.write(f"**日期**: {match_row['date'].strftime('%Y-%m-%d')}")
         col_info1.write(f"**轮次**: {match_row['round']}")
@@ -297,27 +283,22 @@ if uploaded_file is not None:
         actual_away_goals = match_row['away_goals']
         col_info1.metric("实际比分", f"{actual_home_goals} - {actual_away_goals}")
 
-        # 模型预测
         if st.sidebar.button("运行模型预测"):
             home_expg, away_expg = calibrate_expg(
                 match_row['home_team'], match_row['away_team'],
                 team_coeffs, league_avg, trends,
                 set_att, set_def
             )
-            # 回测模式下不应用临场修正，保持纯数据驱动
             h_win, draw, a_win, prob_matrix = poisson_probabilities(
                 home_expg, away_expg, dixon_coles_adjust=True
             )
 
-            # 显示概率
             col_p1, col_p2, col_p3 = st.columns(3)
             col_p1.metric("主胜概率", f"{h_win:.1%}")
             col_p2.metric("平局概率", f"{draw:.1%}")
             col_p3.metric("客胜概率", f"{a_win:.1%}")
-
             st.write(f"模型预期进球: 主 {home_expg:.2f} - 客 {away_expg:.2f}")
 
-            # 确定实际结果
             def outcome(actual_h, actual_a):
                 if actual_h > actual_a:
                     return 'H'
@@ -331,7 +312,6 @@ if uploaded_file is not None:
             predicted_out = max(pred_probs, key=pred_probs.get)
             is_correct = (predicted_out == actual_out)
 
-            # Brier分数
             brier = (h_win - (1 if actual_out == 'H' else 0))**2 + \
                     (draw - (1 if actual_out == 'D' else 0))**2 + \
                     (a_win - (1 if actual_out == 'A' else 0))**2
@@ -341,7 +321,6 @@ if uploaded_file is not None:
             col_acc1.metric("方向正确?", "✅" if is_correct else "❌")
             col_acc2.metric("Brier分数 (越低越好)", f"{brier:.3f}")
 
-            # 保存记录
             if st.button("📌 保存这次回测记录"):
                 record = {
                     '日期': match_row['date'],
@@ -356,13 +335,11 @@ if uploaded_file is not None:
                 st.session_state['backtest_records'].append(record)
                 st.success("已保存！")
 
-        # 展示所有已保存的回测记录
         if st.session_state['backtest_records']:
             st.subheader("📋 回测记录历史")
             records_df = pd.DataFrame(st.session_state['backtest_records'])
             st.dataframe(records_df)
 
-            # 汇总统计
             total = len(records_df)
             correct = records_df['是否正确'].sum()
             accuracy = correct / total if total > 0 else 0
@@ -374,6 +351,117 @@ if uploaded_file is not None:
             if st.button("🗑️ 清空回测记录"):
                 st.session_state['backtest_records'] = []
                 st.rerun()
+
+    # ========== 走地分析模式 ==========
+    else:
+        st.sidebar.subheader("🔄 资深滚球分析")
+        home_team = st.sidebar.selectbox("主队", teams, index=0)
+        away_team = st.sidebar.selectbox("客队", teams, index=1)
+        if home_team == away_team:
+            st.sidebar.error("主客队不能相同")
+        else:
+            home_expg_pre, away_expg_pre = calibrate_expg(
+                home_team, away_team, team_coeffs, league_avg, trends, set_att, set_def
+            )
+            st.sidebar.write(f"赛前模型ExpG：{home_team} {home_expg_pre:.2f} - {away_team} {away_expg_pre:.2f}")
+            use_custom = st.sidebar.checkbox("手动调整赛前ExpG")
+            if use_custom:
+                home_expg_pre = st.sidebar.slider("主队全场ExpG", 0.0, 6.0, float(home_expg_pre), 0.05)
+                away_expg_pre = st.sidebar.slider("客队全场ExpG", 0.0, 6.0, float(away_expg_pre), 0.05)
+
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("**当前比赛状态**")
+            current_min = st.sidebar.slider("当前分钟数", 0, 120, 45, 1)
+            cur_h_goals = st.sidebar.number_input(f"{home_team} 进球", 0, 20, 0)
+            cur_a_goals = st.sidebar.number_input(f"{away_team} 进球", 0, 20, 0)
+            injury = st.sidebar.slider("预计伤停补时（分钟）", 0, 15, 3, 1)
+
+            st.sidebar.markdown("**手动态势调整**")
+            home_momentum = st.sidebar.slider(f"{home_team} 攻击态势", 0.5, 1.5, 1.0, 0.05, help=">1进攻更猛")
+            away_momentum = st.sidebar.slider(f"{away_team} 攻击态势", 0.5, 1.5, 1.0, 0.05)
+
+            st.sidebar.markdown("**突发事件**")
+            red_card_team = st.sidebar.radio("红牌方", ["无", home_team, away_team])
+            red_minute = st.sidebar.number_input("红牌发生分钟（若选择）", 0, 120, 0, 1)
+
+            if st.sidebar.button("更新走地概率"):
+                # 应用红牌
+                if red_card_team != "无" and red_minute > 0 and red_minute <= current_min:
+                    is_home = (red_card_team == home_team)
+                    if is_home:
+                        def_coeff = team_coeffs.loc[home_team, 'CoD_H'] if home_team in team_coeffs.index else 1.0
+                    else:
+                        def_coeff = team_coeffs.loc[away_team, 'CoD_A'] if away_team in team_coeffs.index else 1.0
+                    home_expg_pre, away_expg_pre = red_card_impact(
+                        home_expg_pre, away_expg_pre, red_minute, is_home, def_coeff
+                    )
+
+                hw, dr, aw, lam_h, lam_a = inplay_probabilities(
+                    home_expg_pre, away_expg_pre, current_min, cur_h_goals, cur_a_goals,
+                    home_momentum, away_momentum, injury_time=injury
+                )
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("主胜概率", f"{hw:.1%}")
+                col2.metric("平局概率", f"{dr:.1%}")
+                col3.metric("客胜概率", f"{aw:.1%}")
+                st.write(f"剩余预期进球：{home_team} {lam_h:.2f} - {away_team} {lam_a:.2f}")
+
+                # 模块1：盘口背离
+                with st.expander("📉 场面与盘口背离检测"):
+                    pre_line = st.number_input("赛前让球", value=0.0, step=0.25)
+                    live_line = st.number_input("实时让球", value=0.0, step=0.25)
+                    if pre_line != 0 or live_line != 0:
+                        theoretical_line = (home_expg_pre - away_expg_pre) * 0.8
+                        st.write(f"模型理论让球：{theoretical_line:.2f}")
+                        if abs(theoretical_line - live_line) > 0.3:
+                            st.warning("⚠️ 盘口与预期存在明显背离")
+
+                # 模块2：节奏预判
+                with st.expander("🎵 节奏预判"):
+                    rhythm_h = rhythm_labels.get(home_team, '中节奏')
+                    rhythm_a = rhythm_labels.get(away_team, '中节奏')
+                    st.write(f"{home_team}: {rhythm_h}   |   {away_team}: {rhythm_a}")
+                    if cur_h_goals + cur_a_goals > 0:
+                        st.info("已发生进球，关注节奏变化。")
+
+                # 模块3：反向盘口
+                with st.expander("🔁 下一个进球盘口反推"):
+                    odds_h = st.number_input("主队进球赔率", 1.0, 10.0, 2.20, 0.05)
+                    odds_d = st.number_input("无进球/平赔", 1.0, 10.0, 3.50, 0.05)
+                    odds_a = st.number_input("客队进球赔率", 1.0, 10.0, 2.80, 0.05)
+                    if odds_h > 1.0 and odds_a > 1.0 and odds_d > 1.0:
+                        imp = reverse_implied_probs([odds_h, odds_d, odds_a])
+                        st.write(f"市场隐含概率：主进 {imp[0]:.1%} | 无球 {imp[1]:.1%} | 客进 {imp[2]:.1%}")
+                        model_next = 1 - poisson.cdf(0, lam_h + lam_a)
+                        st.write(f"模型下一球概率：{model_next:.1%}")
+                        if lam_h + lam_a > 0:
+                            model_h = model_next * lam_h / (lam_h + lam_a)
+                            model_a = model_next * lam_a / (lam_h + lam_a)
+                            st.write(f"模型拆解：主进 {model_h:.1%} | 客进 {model_a:.1%}")
+                            if model_h > imp[0] * 1.1:
+                                st.success("主队进球被低估？")
+                            if model_a > imp[2] * 1.1:
+                                st.success("客队进球被低估？")
+
+                # 模块4：时间概率
+                with st.expander("⏳ 进球时间概率"):
+                    remaining = 90 + injury - current_min
+                    if remaining > 0:
+                        p_goal = goal_time_probability(current_min, remaining)
+                        st.write(f"剩余 {remaining} 分钟内至少一球的概率（Weibull）：{p_goal:.1%}")
+
+                # 模块5：压制指数
+                with st.expander("📊 场面压制力参考"):
+                    try:
+                        pen_h = pressure_index.loc[home_team, 'penetration']
+                        pen_a = pressure_index.loc[away_team, 'penetration']
+                        pre_h = pressure_index.loc[home_team, 'pressure']
+                        pre_a = pressure_index.loc[away_team, 'pressure']
+                        st.write(f"{home_team}：穿透力 {pen_h:.2f}  压迫效率 {pre_h:.1f}")
+                        st.write(f"{away_team}：穿透力 {pen_a:.2f}  压迫效率 {pre_a:.1f}")
+                    except:
+                        st.write("数据不足")
 
 else:
     st.info("👈 请上传一个符合格式的xlsx文件开始分析")
