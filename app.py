@@ -353,7 +353,7 @@ if uploaded_file is not None:
                 st.session_state['backtest_records'] = []
                 st.rerun()
 
-    # ========== 走地分析模式 ==========
+        # ========== 走地分析模式（自动计算，无需按钮） ==========
     else:
         st.sidebar.subheader("🔄 资深滚球分析")
         home_team = st.sidebar.selectbox("主队", teams, index=0)
@@ -361,6 +361,7 @@ if uploaded_file is not None:
         if home_team == away_team:
             st.sidebar.error("主客队不能相同")
         else:
+            # 赛前全场ExpG
             home_expg_pre, away_expg_pre = calibrate_expg(
                 home_team, away_team, team_coeffs, league_avg, trends, set_att, set_def
             )
@@ -385,84 +386,87 @@ if uploaded_file is not None:
             red_card_team = st.sidebar.radio("红牌方", ["无", home_team, away_team])
             red_minute = st.sidebar.number_input("红牌发生分钟（若选择）", 0, 120, 0, 1)
 
-            if st.sidebar.button("更新走地概率"):
-                # 应用红牌
-                if red_card_team != "无" and red_minute > 0 and red_minute <= current_min:
-                    is_home = (red_card_team == home_team)
-                    if is_home:
-                        def_coeff = team_coeffs.loc[home_team, 'CoD_H'] if home_team in team_coeffs.index else 1.0
-                    else:
-                        def_coeff = team_coeffs.loc[away_team, 'CoD_A'] if away_team in team_coeffs.index else 1.0
-                    home_expg_pre, away_expg_pre = red_card_impact(
-                        home_expg_pre, away_expg_pre, red_minute, is_home, def_coeff
-                    )
-
-                hw, dr, aw, lam_h, lam_a = inplay_probabilities(
-                    home_expg_pre, away_expg_pre, current_min, cur_h_goals, cur_a_goals,
-                    home_momentum, away_momentum, injury_time=injury
+            # --------------------- 自动计算走地概率 ---------------------
+            # 红牌影响
+            home_adj_expg = home_expg_pre
+            away_adj_expg = away_expg_pre
+            if red_card_team != "无" and red_minute > 0 and red_minute <= current_min:
+                is_home = (red_card_team == home_team)
+                if is_home:
+                    def_coeff = team_coeffs.loc[home_team, 'CoD_H'] if home_team in team_coeffs.index else 1.0
+                else:
+                    def_coeff = team_coeffs.loc[away_team, 'CoD_A'] if away_team in team_coeffs.index else 1.0
+                home_adj_expg, away_adj_expg = red_card_impact(
+                    home_expg_pre, away_expg_pre, red_minute, is_home, def_coeff
                 )
 
-                col1, col2, col3 = st.columns(3)
-                col1.metric("主胜概率", f"{hw:.1%}")
-                col2.metric("平局概率", f"{dr:.1%}")
-                col3.metric("客胜概率", f"{aw:.1%}")
-                st.write(f"剩余预期进球：{home_team} {lam_h:.2f} - {away_team} {lam_a:.2f}")
+            hw, dr, aw, lam_h, lam_a = inplay_probabilities(
+                home_adj_expg, away_adj_expg, current_min, cur_h_goals, cur_a_goals,
+                home_momentum, away_momentum, injury_time=injury
+            )
 
-                # 模块1：盘口背离
-                with st.expander("📉 场面与盘口背离检测"):
-                    pre_line = st.number_input("赛前让球", value=0.0, step=0.25)
-                    live_line = st.number_input("实时让球", value=0.0, step=0.25)
-                    if pre_line != 0 or live_line != 0:
-                        theoretical_line = (home_expg_pre - away_expg_pre) * 0.8
-                        st.write(f"模型理论让球：{theoretical_line:.2f}")
-                        if abs(theoretical_line - live_line) > 0.3:
-                            st.warning("⚠️ 盘口与预期存在明显背离")
+            # --------------------- 结果展示 ---------------------
+            col1, col2, col3 = st.columns(3)
+            col1.metric("主胜概率", f"{hw:.1%}")
+            col2.metric("平局概率", f"{dr:.1%}")
+            col3.metric("客胜概率", f"{aw:.1%}")
+            st.write(f"剩余预期进球：{home_team} {lam_h:.2f} - {away_team} {lam_a:.2f}")
 
-                # 模块2：节奏预判
-                with st.expander("🎵 节奏预判"):
-                    rhythm_h = rhythm_labels.get(home_team, '中节奏')
-                    rhythm_a = rhythm_labels.get(away_team, '中节奏')
-                    st.write(f"{home_team}: {rhythm_h}   |   {away_team}: {rhythm_a}")
-                    if cur_h_goals + cur_a_goals > 0:
-                        st.info("已发生进球，关注节奏变化。")
+            # 模块1：盘口背离
+            with st.expander("📉 场面与盘口背离检测"):
+                pre_line = st.number_input("赛前让球", value=0.0, step=0.25)
+                live_line = st.number_input("实时让球", value=0.0, step=0.25)
+                if pre_line != 0 or live_line != 0:
+                    theoretical_line = (home_expg_pre - away_expg_pre) * 0.8
+                    st.write(f"模型理论让球：{theoretical_line:.2f}")
+                    if abs(theoretical_line - live_line) > 0.3:
+                        st.warning("⚠️ 盘口与预期存在明显背离")
 
-                # 模块3：反向盘口
-                with st.expander("🔁 下一个进球盘口反推"):
-                    odds_h = st.number_input("主队进球赔率", 1.0, 10.0, 2.20, 0.05)
-                    odds_d = st.number_input("无进球/平赔", 1.0, 10.0, 3.50, 0.05)
-                    odds_a = st.number_input("客队进球赔率", 1.0, 10.0, 2.80, 0.05)
-                    if odds_h > 1.0 and odds_a > 1.0 and odds_d > 1.0:
-                        imp = reverse_implied_probs([odds_h, odds_d, odds_a])
-                        st.write(f"市场隐含概率：主进 {imp[0]:.1%} | 无球 {imp[1]:.1%} | 客进 {imp[2]:.1%}")
-                        model_next = 1 - poisson.cdf(0, lam_h + lam_a)   # 现在 poisson 已导入
-                        st.write(f"模型下一球概率：{model_next:.1%}")
-                        if lam_h + lam_a > 0:
-                            model_h = model_next * lam_h / (lam_h + lam_a)
-                            model_a = model_next * lam_a / (lam_h + lam_a)
-                            st.write(f"模型拆解：主进 {model_h:.1%} | 客进 {model_a:.1%}")
-                            if model_h > imp[0] * 1.1:
-                                st.success("主队进球被低估？")
-                            if model_a > imp[2] * 1.1:
-                                st.success("客队进球被低估？")
+            # 模块2：节奏预判
+            with st.expander("🎵 节奏预判"):
+                rhythm_h = rhythm_labels.get(home_team, '中节奏')
+                rhythm_a = rhythm_labels.get(away_team, '中节奏')
+                st.write(f"{home_team}: {rhythm_h}   |   {away_team}: {rhythm_a}")
+                if cur_h_goals + cur_a_goals > 0:
+                    st.info("已发生进球，关注节奏变化。")
 
-                # 模块4：时间概率
-                with st.expander("⏳ 进球时间概率"):
-                    remaining = 90 + injury - current_min
-                    if remaining > 0:
-                        p_goal = goal_time_probability(current_min, remaining)
-                        st.write(f"剩余 {remaining} 分钟内至少一球的概率（Weibull）：{p_goal:.1%}")
+            # 模块3：反向盘口
+            with st.expander("🔁 下一个进球盘口反推"):
+                odds_h = st.number_input("主队进球赔率", 1.0, 10.0, 2.20, 0.05)
+                odds_d = st.number_input("无进球/平赔", 1.0, 10.0, 3.50, 0.05)
+                odds_a = st.number_input("客队进球赔率", 1.0, 10.0, 2.80, 0.05)
+                if odds_h > 1.0 and odds_a > 1.0 and odds_d > 1.0:
+                    imp = reverse_implied_probs([odds_h, odds_d, odds_a])
+                    st.write(f"市场隐含概率：主进 {imp[0]:.1%} | 无球 {imp[1]:.1%} | 客进 {imp[2]:.1%}")
+                    model_next = 1 - poisson.cdf(0, lam_h + lam_a)
+                    st.write(f"模型下一球概率：{model_next:.1%}")
+                    if lam_h + lam_a > 0:
+                        model_h = model_next * lam_h / (lam_h + lam_a)
+                        model_a = model_next * lam_a / (lam_h + lam_a)
+                        st.write(f"模型拆解：主进 {model_h:.1%} | 客进 {model_a:.1%}")
+                        if model_h > imp[0] * 1.1:
+                            st.success("主队进球被低估？")
+                        if model_a > imp[2] * 1.1:
+                            st.success("客队进球被低估？")
 
-                # 模块5：压制指数
-                with st.expander("📊 场面压制力参考"):
-                    try:
-                        pen_h = pressure_index.loc[home_team, 'penetration']
-                        pen_a = pressure_index.loc[away_team, 'penetration']
-                        pre_h = pressure_index.loc[home_team, 'pressure']
-                        pre_a = pressure_index.loc[away_team, 'pressure']
-                        st.write(f"{home_team}：穿透力 {pen_h:.2f}  压迫效率 {pre_h:.1f}")
-                        st.write(f"{away_team}：穿透力 {pen_a:.2f}  压迫效率 {pre_a:.1f}")
-                    except:
-                        st.write("数据不足")
+            # 模块4：时间概率
+            with st.expander("⏳ 进球时间概率"):
+                remaining = 90 + injury - current_min
+                if remaining > 0:
+                    p_goal = goal_time_probability(current_min, remaining)
+                    st.write(f"剩余 {remaining} 分钟内至少一球的概率（Weibull）：{p_goal:.1%}")
+
+            # 模块5：压制指数
+            with st.expander("📊 场面压制力参考"):
+                try:
+                    pen_h = pressure_index.loc[home_team, 'penetration']
+                    pen_a = pressure_index.loc[away_team, 'penetration']
+                    pre_h = pressure_index.loc[home_team, 'pressure']
+                    pre_a = pressure_index.loc[away_team, 'pressure']
+                    st.write(f"{home_team}：穿透力 {pen_h:.2f}  压迫效率 {pre_h:.1f}")
+                    st.write(f"{away_team}：穿透力 {pen_a:.2f}  压迫效率 {pre_a:.1f}")
+                except:
+                    st.write("数据不足")
 
 else:
     st.info("👈 请上传一个符合格式的xlsx文件开始分析")
