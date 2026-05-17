@@ -51,7 +51,7 @@ if uploaded_file is not None:
 
     mode = st.sidebar.radio("选择模式", ["实时预测", "历史回测", "走地分析"])
 
-    # ========== 实时预测模式 ==========
+        # ========== 实时预测模式 ==========
     if mode == "实时预测":
         st.sidebar.subheader("比赛推演")
         home_team = st.sidebar.selectbox("主队", teams, index=0)
@@ -60,7 +60,7 @@ if uploaded_file is not None:
         if home_team == away_team:
             st.sidebar.error("主客队不能相同")
         else:
-            # --- 临场修正面板（完整版）---
+            # --- 临场修正面板（修正版，提前初始化动机变量）---
             st.sidebar.subheader("🧠 临场修正")
             apply_correction = st.sidebar.checkbox(
                 "开启情景修正", value=False,
@@ -70,6 +70,14 @@ if uploaded_file is not None:
             home_adj = 1.0
             away_adj = 1.0
             adj_log = []
+
+            # 初始化软信息变量
+            home_motivation = '正常'
+            away_motivation = '正常'
+            home_derby = False
+            away_derby = False
+            home_fatigue = False
+            away_fatigue = False
 
             if apply_correction:
                 st.sidebar.markdown("**战意锚点**")
@@ -254,6 +262,33 @@ if uploaded_file is not None:
             with col_t2:
                 st.plotly_chart(plot_xg_trend(away_team, df), use_container_width=True)
 
+            # ========== 冷门倾向分析 ==========
+            st.markdown("---")
+            st.subheader("❄️ 冷门倾向分析")
+            with st.expander("点击查看冷门推演结果"):
+                upset_score, upset_max, upset_reasons = compute_upset_score(
+                    home_team, away_team,
+                    home_expg, away_expg,
+                    team_coeffs, xpts_summary, trends, shooting,
+                    set_att, set_def, stability, rhythm_labels,
+                    home_adj=home_adj, away_adj=away_adj,
+                    home_motivation=home_motivation,
+                    away_motivation=away_motivation,
+                    home_fatigue=home_fatigue,
+                    away_fatigue=away_fatigue,
+                    home_derby=home_derby,
+                    away_derby=away_derby
+                )
+
+                upset_pct = upset_score / upset_max
+                color = 'green' if upset_pct < 0.4 else ('orange' if upset_pct < 0.7 else 'red')
+                st.markdown(f"**冷门倾向评分：{upset_score}/{upset_max}**")
+                st.progress(upset_pct, text=f"{upset_score}/{upset_max}")
+                for reason in upset_reasons:
+                    st.write(f"- {reason}")
+                if upset_score >= 5:
+                    st.warning("⚠️ 冷门风险较高，建议谨慎对待热门方向")
+
             # ---------- AI 深度解读 ----------
             st.markdown("---")
             st.subheader("🧠 DeepSeek 深度解读")
@@ -301,10 +336,12 @@ if uploaded_file is not None:
 临场调整系数：主队 x{home_adj:.2f}，客队 x{away_adj:.2f}
 调整说明：{'; '.join(adj_log) if adj_log else '无'}
 
+冷门倾向评分：{upset_score}/{upset_max}，主要因素：{'; '.join(upset_reasons)}
+
 请用简洁专业的语言：
 1. 分析模型概率背后的关键驱动因素。
 2. 指出本场比赛最值得关注的战术点（如节奏、定位球、防守稳定性）。
-3. 提供1-2条滚球观察建议（基于剩余时间、比分等，但暂未进行中）。
+3. 结合冷门信号，提供1-2条滚球观察建议（基于剩余时间、比分等，但暂未进行中）。
 注意：你的分析不构成投注建议，仅供决策参考。
 """
                 with st.spinner("AI 正在思考..."):
