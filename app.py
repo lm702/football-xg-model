@@ -16,6 +16,7 @@ from src.inplay import (inplay_probabilities, compute_pressure_index,
                         red_card_impact, goal_time_probability,
                         goal_rhythm_stats)
 from src.deepseek_client import deepseek_chat
+from src.upset_scanner import compute_upset_score
 
 st.set_page_config(page_title="足球xG推理模型", layout="wide")
 st.title("⚽ 足球比赛深度推理模型（基于xG数据）")
