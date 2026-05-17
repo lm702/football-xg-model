@@ -52,7 +52,7 @@ if uploaded_file is not None:
 
     mode = st.sidebar.radio("选择模式", ["实时预测", "历史回测", "走地分析"])
 
-        # ========== 实时预测模式 ==========
+    # ========== 实时预测模式 ==========
     if mode == "实时预测":
         st.sidebar.subheader("比赛推演")
         home_team = st.sidebar.selectbox("主队", teams, index=0)
@@ -282,7 +282,6 @@ if uploaded_file is not None:
                 )
 
                 upset_pct = upset_score / upset_max
-                color = 'green' if upset_pct < 0.4 else ('orange' if upset_pct < 0.7 else 'red')
                 st.markdown(f"**冷门倾向评分：{upset_score}/{upset_max}**")
                 st.progress(upset_pct, text=f"{upset_score}/{upset_max}")
                 for reason in upset_reasons:
@@ -293,6 +292,7 @@ if uploaded_file is not None:
             # ---------- AI 深度解读 ----------
             st.markdown("---")
             st.subheader("🧠 DeepSeek 深度解读")
+            ai_analysis = None  # 初始化，以便导出使用
             if st.button("生成 AI 解读"):
                 # 准备上下文数据
                 trend_h_text = ""
@@ -346,12 +346,58 @@ if uploaded_file is not None:
 注意：你的分析不构成投注建议，仅供决策参考。
 """
                 with st.spinner("AI 正在思考..."):
-                    analysis = deepseek_chat(prompt)
-                if analysis:
+                    ai_analysis = deepseek_chat(prompt)
+                if ai_analysis:
                     st.success("AI 解读生成完毕")
-                    st.markdown(analysis)
+                    st.markdown(ai_analysis)
                 else:
                     st.warning("无法获取 AI 解读，请检查 API Key 或网络。")
+
+            # ========== 导出预测结果（含AI解读） ==========
+            st.markdown("---")
+            st.subheader("📤 导出预测结果")
+            from io import BytesIO
+
+            # 整理导出数据
+            export_data = {
+                "项目": [
+                    "主队", "客队",
+                    "主队ExpG", "客队ExpG",
+                    "主胜概率", "平局概率", "客胜概率",
+                    "大于2.5球概率", "双方进球概率", "主队零封概率", "客队零封概率",
+                    "冷门倾向评分 (0-10)",
+                    "冷门因素",
+                    "主队近期xG净胜值变化", "客队近期xG净胜值变化",
+                    "主队稳定性", "客队稳定性",
+                    "AI 深度解读"
+                ],
+                "数值": [
+                    home_team, away_team,
+                    f"{home_expg:.2f}", f"{away_expg:.2f}",
+                    f"{h_win:.1%}", f"{draw:.1%}", f"{a_win:.1%}",
+                    f"{over25:.1%}", f"{btts:.1%}", f"{home_clean:.1%}", f"{away_clean:.1%}",
+                    f"{upset_score}/{upset_max}",
+                    "; ".join(upset_reasons),
+                    f"{trends.get(home_team, {}).get('delta_net', 0):.2f}" if home_team in trends else "无",
+                    f"{trends.get(away_team, {}).get('delta_net', 0):.2f}" if away_team in trends else "无",
+                    stability.get(home_team, {}).get('rating', '无') if home_team in stability else "无",
+                    stability.get(away_team, {}).get('rating', '无') if away_team in stability else "无",
+                    ai_analysis if ai_analysis else "未生成AI解读"
+                ]
+            }
+            export_df = pd.DataFrame(export_data)
+
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                export_df.to_excel(writer, index=False, sheet_name='预测结果')
+            excel_bytes = output.getvalue()
+
+            st.download_button(
+                label="📥 下载预测结果 (Excel)",
+                data=excel_bytes,
+                file_name=f"预测_{home_team}_vs_{away_team}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
     # ========== 历史回测模式 ==========
     elif mode == "历史回测":
